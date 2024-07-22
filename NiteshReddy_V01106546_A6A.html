@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8"/>
+	<title></title>
+	<meta name="generator" content="LibreOffice 7.6.7.2 (Linux)"/>
+	<meta name="created" content="00:00:00"/>
+	<meta name="changed" content="00:00:00"/>
+	<style type="text/css">
+		@page { size: 8.5in 11in; margin: 0.79in }
+		p { line-height: 115%; margin-bottom: 0.1in; background: transparent }
+		pre { background: transparent }
+		pre.western { font-family: "Liberation Mono", monospace; font-size: 10pt }
+		pre.cjk { font-family: "Noto Sans Mono CJK SC", monospace; font-size: 10pt }
+		pre.ctl { font-family: "Liberation Mono", monospace; font-size: 10pt }
+	</style>
+</head>
+<body lang="en-US" link="#000080" vlink="#800000" dir="ltr"><pre class="western"># Load necessary libraries
+library(tidyverse)
+library(lubridate)
+library(imputeTS)
+library(forecast)
+library(ggplot2)
+
+setwd(&quot;C:/Users/NiteshReddy/Downloads&quot;)
+# Load the dataset
+nflx_data &lt;- read.csv(&quot;NFLX Historical Data.csv&quot;)
+
+# Convert the Date column to Date type using parse_date_time function
+nflx_data$Date &lt;- parse_date_time(nflx_data$Date, orders = c(&quot;mdy&quot;, &quot;dmy&quot;, &quot;ymd&quot;))
+
+# Check for missing dates and remove rows with missing dates
+nflx_data &lt;- nflx_data %&gt;% drop_na(Date)
+
+# Convert Vol. and Change % from string to numeric
+nflx_data$Vol. &lt;- as.numeric(gsub(&quot;M&quot;, &quot;&quot;, nflx_data$Vol.)) * 1e6
+nflx_data$Change. &lt;- as.numeric(gsub(&quot;%&quot;, &quot;&quot;, nflx_data$Change.))
+
+# Check for missing values in other columns
+sum(is.na(nflx_data))
+
+# Interpolate missing values if there are any
+nflx_data &lt;- na_interpolation(nflx_data)
+
+# Check for outliers using boxplot
+boxplot(nflx_data$Price, main=&quot;Boxplot for Price&quot;, ylab=&quot;Price&quot;)
+
+# Plot the data
+ggplot(nflx_data, aes(x = Date, y = Price)) +
+  geom_line() +
+  labs(title = &quot;Netflix Stock Price Over Time&quot;, x = &quot;Date&quot;, y = &quot;Price&quot;)
+
+# Split the data into training and testing sets
+split_date &lt;- as.Date(&quot;2023-12-31&quot;)
+train_data &lt;- nflx_data %&gt;% filter(Date &lt;= split_date)
+test_data &lt;- nflx_data %&gt;% filter(Date &gt; split_date)
+
+# Convert the data to monthly
+nflx_data_monthly &lt;- nflx_data %&gt;%
+  group_by(month = floor_date(Date, &quot;month&quot;)) %&gt;%
+  summarise(Price = mean(Price))
+
+# Create time series object
+nflx_ts &lt;- ts(nflx_data_monthly$Price, start = c(2020, 1), frequency = 12)
+
+# Decompose the time series using additive model
+decomp_additive &lt;- decompose(nflx_ts, type = &quot;additive&quot;)
+
+# Decompose the time series using multiplicative model
+decomp_multiplicative &lt;- decompose(nflx_ts, type = &quot;multiplicative&quot;)
+
+# Plot the decomposed components for additive model
+autoplot(decomp_additive) +
+  ggtitle(&quot;Additive Decomposition of Netflix Stock Price&quot;) +
+  theme_minimal()
+
+# Plot the decomposed components for multiplicative model
+autoplot(decomp_multiplicative) +
+  ggtitle(&quot;Multiplicative Decomposition of Netflix Stock Price&quot;) +
+  theme_minimal()
+
+# Save the plots
+ggsave(&quot;additive_decomposition.png&quot;)
+ggsave(&quot;multiplicative_decomposition.png&quot;)
+
+# Print a message to indicate completion
+print(&quot;Data cleaning, interpolation, plotting, and decomposition are complete.&quot;)
+
+
+
+## UNIVARIATE ANALYSIS
+
+# Create time series objects
+nflx_ts_daily &lt;- ts(nflx_data$Price, start = c(2020, 1), frequency = 365.25)
+nflx_ts_monthly &lt;- ts(nflx_data_monthly$Price, start = c(2020, 1), frequency = 12)
+
+# 1. Holt-Winters model and forecast for the next year
+hw_model &lt;- HoltWinters(nflx_ts_monthly)
+hw_forecast &lt;- forecast(hw_model, h = 12)
+autoplot(hw_forecast) +
+  ggtitle(&quot;Holt-Winters Forecast for Netflix Stock Price&quot;) +
+  theme_minimal()
+
+# 2. Fit ARIMA model to the daily data
+arima_model_daily &lt;- auto.arima(nflx_ts_daily)
+summary(arima_model_daily)
+
+# Diagnostic check for ARIMA model
+checkresiduals(arima_model_daily)
+
+# Fit SARIMA model to the daily data
+sarima_model_daily &lt;- auto.arima(nflx_ts_daily, seasonal = TRUE)
+summary(sarima_model_daily)
+
+# Compare ARIMA and SARIMA models
+arima_aic &lt;- AIC(arima_model_daily)
+sarima_aic &lt;- AIC(sarima_model_daily)
+print(paste(&quot;ARIMA AIC:&quot;, arima_aic))
+print(paste(&quot;SARIMA AIC:&quot;, sarima_aic))
+
+# Forecast the series for the next three months using the better model
+best_model_daily &lt;- ifelse(arima_aic &lt; sarima_aic, arima_model_daily, sarima_model_daily)
+daily_forecast &lt;- forecast(best_model_daily, h = 90)
+autoplot(daily_forecast) +
+  ggtitle(&quot;Daily Forecast for Netflix Stock Price&quot;) +
+  theme_minimal()
+
+# 3. Fit ARIMA model to the monthly series
+arima_model_monthly &lt;- auto.arima(nflx_ts_monthly)
+summary(arima_model_monthly)
+
+# Forecast the monthly series
+monthly_forecast &lt;- forecast(arima_model_monthly, h = 12)
+autoplot(monthly_forecast) +
+  ggtitle(&quot;Monthly ARIMA Forecast for Netflix Stock Price&quot;) +
+  theme_minimal()
+
+# Save the plots
+ggsave(&quot;hw_forecast.png&quot;)
+ggsave(&quot;daily_forecast.png&quot;)
+ggsave(&quot;monthly_forecast.png&quot;)
+
+# Print a message to indicate completion
+print(&quot;Holt-Winters, ARIMA, and SARIMA modeling and forecasting are complete.&quot;)
+
+
+
+## MULTIVARIATE
+
+library(keras)
+library(randomForest)
+library(rpart)
+library(caret)
+
+# Feature engineering: Create lagged variables and moving averages as features
+nflx_data &lt;- nflx_data %&gt;%
+  mutate(Price_lag1 = lag(Price, 1),
+         Price_lag2 = lag(Price, 2),
+         Price_lag3 = lag(Price, 3),
+         Vol_lag1 = lag(Vol., 1),
+         Vol_lag2 = lag(Vol., 2),
+         Vol_lag3 = lag(Vol., 3),
+         Price_ma7 = rollmean(Price, 7, fill = NA, align = &quot;right&quot;),
+         Price_ma30 = rollmean(Price, 30, fill = NA, align = &quot;right&quot;))
+
+# Remove rows with NA values generated by lagging
+nflx_data &lt;- nflx_data %&gt;% drop_na()
+
+# Split the data into training and testing sets
+set.seed(123)
+train_index &lt;- createDataPartition(nflx_data$Price, p = 0.8, list = FALSE)
+train_data &lt;- nflx_data[train_index, ]
+test_data &lt;- nflx_data[-train_index, ]
+
+# Convert features to numeric
+train_features &lt;- train_data %&gt;% select(-Date, -Price) %&gt;% mutate(across(everything(), as.numeric))
+test_features &lt;- test_data %&gt;% select(-Date, -Price) %&gt;% mutate(across(everything(), as.numeric))
+
+# Check if the number of columns match
+if (ncol(train_features) != ncol(test_features)) {
+  stop(&quot;The number of columns in train_features and test_features do not match.&quot;)
+}
+
+# Normalize the features
+train_features &lt;- scale(train_features)
+test_features &lt;- scale(test_features, center = attr(train_features, &quot;scaled:center&quot;), scale = attr(train_features, &quot;scaled:scale&quot;))
+
+# Prepare labels
+train_labels &lt;- train_data$Price
+test_labels &lt;- test_data$Price
+
+# Reshape the data for LSTM input (samples, time steps, features)
+train_array &lt;- array(train_features, dim = c(nrow(train_features), 1, ncol(train_features)))
+test_array &lt;- array(test_features, dim = c(nrow(test_features), 1, ncol(test_features)))
+
+# Build and train the LSTM model
+lstm_model &lt;- keras_model_sequential() %&gt;%
+  layer_lstm(units = 50, input_shape = c(1, ncol(train_features)), return_sequences = TRUE) %&gt;%
+  layer_lstm(units = 50) %&gt;%
+  layer_dense(units = 1)
+
+lstm_model %&gt;% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam'
+)
+
+history &lt;- lstm_model %&gt;% fit(
+  train_array, train_labels,
+  epochs = 50,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Forecast using the LSTM model
+lstm_forecast &lt;- lstm_model %&gt;% predict(test_array)
+
+# Plot the LSTM forecast
+plot(test_labels, type = &quot;l&quot;, col = &quot;blue&quot;, main = &quot;LSTM Forecast vs Actual&quot;, xlab = &quot;Time&quot;, ylab = &quot;Price&quot;)
+lines(lstm_forecast, col = &quot;red&quot;)
+legend(&quot;topright&quot;, legend = c(&quot;Actual&quot;, &quot;Forecast&quot;), col = c(&quot;blue&quot;, &quot;red&quot;), lty = 1)
+
+# Build and train the Random Forest model
+rf_model &lt;- randomForest(Price ~ ., data = train_data %&gt;% select(-Date))
+rf_forecast &lt;- predict(rf_model, test_data %&gt;% select(-Date, -Price))
+
+# Plot the Random Forest forecast
+plot(test_labels, type = &quot;l&quot;, col = &quot;blue&quot;, main = &quot;Random Forest Forecast vs Actual&quot;, xlab = &quot;Time&quot;, ylab = &quot;Price&quot;)
+lines(rf_forecast, col = &quot;red&quot;)
+legend(&quot;topright&quot;, legend = c(&quot;Actual&quot;, &quot;Forecast&quot;), col = c(&quot;blue&quot;, &quot;red&quot;), lty = 1)
+
+# Build and train the Decision Tree model
+dt_model &lt;- rpart(Price ~ ., data = train_data %&gt;% select(-Date))
+dt_forecast &lt;- predict(dt_model, test_data %&gt;% select(-Date, -Price))
+
+# Plot the Decision Tree forecast
+plot(test_labels, type = &quot;l&quot;, col = &quot;blue&quot;, main = &quot;Decision Tree Forecast vs Actual&quot;, xlab = &quot;Time&quot;, ylab = &quot;Price&quot;)
+lines(dt_forecast, col = &quot;red&quot;)
+legend(&quot;topright&quot;, legend = c(&quot;Actual&quot;, &quot;Forecast&quot;), col = c(&quot;blue&quot;, &quot;red&quot;), lty = 1)
+
+# Save the plots
+ggsave(&quot;lstm_forecast.png&quot;)
+ggsave(&quot;rf_forecast.png&quot;)
+ggsave(&quot;dt_forecast.png&quot;)
+
+# Print a message to indicate completion
+print(&quot;Multivariate forecasting using LSTM, Random Forest, and Decision Tree models is complete.&quot;)
+
+install.packages(&quot;imputeTS&quot;)</pre>
+</body>
+</html>
